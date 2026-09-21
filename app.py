@@ -21,7 +21,21 @@ import core_mit041 as core
 
 st.set_page_config(page_title="MIT041 · Levantamento Fiscal", layout="wide")
 
-MODELO_PATH = os.path.join(os.path.dirname(__file__), "modelo", "MIT041_modelo.docx")
+# Procura o modelo em vários locais (raiz do repo ou subpasta modelo/)
+def _achar_modelo():
+    base = os.path.dirname(os.path.abspath(__file__))
+    candidatos = [
+        os.path.join(base, "modelo", "MIT041_modelo.docx"),
+        os.path.join(base, "MIT041_modelo.docx"),
+        os.path.join(os.getcwd(), "modelo", "MIT041_modelo.docx"),
+        os.path.join(os.getcwd(), "MIT041_modelo.docx"),
+    ]
+    for c in candidatos:
+        if os.path.exists(c):
+            return c
+    return None
+
+MODELO_PATH = _achar_modelo()
 
 # Perguntas que NÃO são respondidas pelas tabelas -> campo em tela.
 PERG_MANUAIS = [
@@ -88,9 +102,21 @@ def prep_cc7(up, f3k_raw):
 st.title("📋 MIT041 · Automação do Levantamento Fiscal")
 st.caption("Preenche o modelo padrão TOTVS (layout imutável) · SFM/F4M · SF4 · F3K · CC7 · SFT")
 
-if not os.path.exists(MODELO_PATH):
-    st.error("Modelo `modelo/MIT041_modelo.docx` não encontrado no repositório.")
-    st.stop()
+if not MODELO_PATH:
+    st.warning(
+        "Modelo `MIT041_modelo.docx` não encontrado no repositório "
+        "(procurei na raiz e em `modelo/`). Envie o modelo abaixo para continuar, "
+        "ou coloque o arquivo na raiz do repo com esse nome exato."
+    )
+    up_modelo = st.file_uploader("Enviar MIT041_modelo.docx", type=["docx"], key="modelo")
+    if up_modelo:
+        tmp = os.path.join(os.getcwd(), "MIT041_modelo.docx")
+        with open(tmp, "wb") as fh:
+            fh.write(up_modelo.getbuffer())
+        MODELO_PATH = tmp
+        st.success("Modelo carregado. Pode prosseguir.")
+    else:
+        st.stop()
 
 with st.sidebar:
     st.header("⚙️ Ambientação")
