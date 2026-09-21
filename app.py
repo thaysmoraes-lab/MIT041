@@ -43,13 +43,47 @@ def _show(df, **kw):
     convertendo tudo para texto)."""
     if df is None:
         return
-    safe = df.copy()
+    safe = df.head(200).copy()  # limita linhas exibidas (performance)
     for c in safe.columns:
         safe[c] = safe[c].map(
             lambda v: "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v)
         )
     safe.columns = [str(c) for c in safe.columns]
     st.dataframe(safe, **kw)
+
+
+# ---- Leituras cacheadas: só reprocessam quando o arquivo muda ----
+@st.cache_data(show_spinner="Lendo F4M/SFM...")
+def load_f4m(data: bytes):
+    df = core._read(io.BytesIO(data), sheet="SFM", cols=core.F4M_COLS)
+    return df[df["tes"].notna()].drop_duplicates(subset=["tes", "cfop", "ncm", "estado"])
+
+
+@st.cache_data(show_spinner="Lendo SF4...")
+def load_sf4(data: bytes):
+    df = core._read(io.BytesIO(data), sheet="SF4", cols=core.SF4_COLS)
+    return df[df["tes"].notna()]
+
+
+@st.cache_data(show_spinner="Lendo F3K...")
+def load_f3k(data: bytes):
+    return prep_f3k(io.BytesIO(data))
+
+
+@st.cache_data(show_spinner="Lendo CC7...")
+def load_cc7(data: bytes, _f3k_raw):
+    return prep_cc7(io.BytesIO(data), _f3k_raw)
+
+
+@st.cache_data(show_spinner="Lendo SFT...")
+def load_sft(data: bytes):
+    return core._read(io.BytesIO(data)) if core.SFT_COLS is None \
+        else core._read(io.BytesIO(data), cols=core.SFT_COLS)
+
+
+@st.cache_data(show_spinner="Analisando amarrações...")
+def analisar_cached(f4m, sf4, f3k_raw, cc7_raw):
+    return core.analisar(f4m=f4m, sf4=sf4, f3k=f3k_raw, cc7=cc7_raw)
 
 # Perguntas que NÃO são respondidas pelas tabelas -> campo em tela.
 PERG_MANUAIS = [
@@ -163,17 +197,15 @@ with c3:
 f4m = sf4 = f3k_raw = f3k = cc7_raw = cc7 = sft = None
 try:
     if up_f4m:
-        f4m = core._read(up_f4m, sheet="SFM", cols=core.F4M_COLS)
-        f4m = f4m[f4m["tes"].notna()].drop_duplicates(subset=["tes", "cfop", "ncm", "estado"])
+        f4m = load_f4m(up_f4m.getvalue())
     if up_sf4:
-        sf4 = core._read(up_sf4, sheet="SF4", cols=core.SF4_COLS)
-        sf4 = sf4[sf4["tes"].notna()]
+        sf4 = load_sf4(up_sf4.getvalue())
     if up_f3k:
-        f3k_raw, f3k = prep_f3k(up_f3k)
+        f3k_raw, f3k = load_f3k(up_f3k.getvalue())
     if up_cc7:
-        cc7_raw, cc7 = prep_cc7(up_cc7, f3k_raw)
+        cc7_raw, cc7 = load_cc7(up_cc7.getvalue(), f3k_raw)
     if up_sft:
-        sft = core._read(up_sft) if core.SFT_COLS is None else core._read(up_sft, cols=core.SFT_COLS)
+        sft = load_sft(up_sft.getvalue())
 except Exception as e:
     st.error(f"Erro ao ler as planilhas: {e}")
     st.stop()
@@ -192,7 +224,17 @@ if carregou:
 
 respostas_auto = {}
 if carregou:
-    respostas_auto = core.analisar(f4m=f4m, sf4=sf4, f3k=f3k_raw, cc7=cc7_raw)
+    # cacheia por identidade dos uploads (evita recalcular a cada tecla digitada)
+    chave = tuple(
+        (up.name, up.size) if up else None
+        for up in [up_f4m, up_sf4, up_f3k, up_cc7]
+    )
+    if st.session_state.get("_chave_auto") != chave:
+        st.session_state["_resp_auto"] = core.analisar(
+            f4m=f4m, sf4=sf4, f3k=f3k_raw, cc7=cc7_raw)
+        st.session_state["_chave_auto"] = chave
+    respostas_auto = st.session_state.get("_resp_auto", {})
+
     st.subheader("2️⃣ Respostas automáticas (a partir das tabelas)")
     if respostas_auto:
         df_auto = pd.DataFrame(
@@ -202,14 +244,23 @@ if carregou:
         st.write("Nenhuma resposta automática gerada com as tabelas atuais.")
 
 st.subheader("3️⃣ Perguntas a responder em tela")
-st.caption("Não extraídas das tabelas. Preencha o que tiver; em branco fica em branco no documento.")
-respostas_manual = {}
-secao_atual = None
-for item, rotulo, secao in PERG_MANUAIS:
-    if secao != secao_atual:
-        st.markdown(f"**{secao}**")
-        secao_atual = secao
-    respostas_manual[item] = st.text_input(f"{item} — {rotulo}", key=f"m_{item}")
+st.caption("Não extraídas das tabelas. Preencha o que tiver e clique em **Aplicar respostas**; em branco fica em branco no documento.")
+with st.form("form_manuais"):
+    respostas_manual = {}
+    secao_atual = None
+    for item, rotulo, secao in PERG_MANUAIS:
+        if secao != secao_atual:
+            st.markdown(f"**{secao}**")
+            secao_atual = secao
+        respostas_manual[item] = st.text_input(f"{item} — {rotulo}", key=f"m_{item}")
+    aplicar = st.form_submit_button("💾 Aplicar respostas")
+# guarda as respostas manuais para uso na geração
+if "resp_manual" not in st.session_state:
+    st.session_state["resp_manual"] = {}
+if aplicar:
+    st.session_state["resp_manual"] = {k: v for k, v in respostas_manual.items() if v}
+    st.success("Respostas aplicadas.")
+respostas_manual = st.session_state["resp_manual"]
 
 if carregou:
     with st.expander("4️⃣ Tabelas de dados (anexo do documento)"):
