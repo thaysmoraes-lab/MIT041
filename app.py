@@ -37,6 +37,20 @@ def _achar_modelo():
 
 MODELO_PATH = _achar_modelo()
 
+
+def _show(df, **kw):
+    """Exibe DataFrame de forma segura (evita ArrowInvalid/OverflowError
+    convertendo tudo para texto)."""
+    if df is None:
+        return
+    safe = df.copy()
+    for c in safe.columns:
+        safe[c] = safe[c].map(
+            lambda v: "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v)
+        )
+    safe.columns = [str(c) for c in safe.columns]
+    st.dataframe(safe, **kw)
+
 # Perguntas que NÃO são respondidas pelas tabelas -> campo em tela.
 PERG_MANUAIS = [
     ("1.1", "Regime de Tributação (Real/Presumido/Simples)", "Cenário Geral"),
@@ -183,7 +197,7 @@ if carregou:
     if respostas_auto:
         df_auto = pd.DataFrame(
             [{"Item": k, "Resposta": v} for k, v in sorted(respostas_auto.items())])
-        st.dataframe(df_auto, use_container_width=True, hide_index=True)
+        _show(df_auto, use_container_width=True, hide_index=True)
     else:
         st.write("Nenhuma resposta automática gerada com as tabelas atuais.")
 
@@ -201,13 +215,13 @@ if carregou:
     with st.expander("4️⃣ Tabelas de dados (anexo do documento)"):
         if f3k is not None:
             st.markdown("**cBenef (F3K)**")
-            st.dataframe(f3k, use_container_width=True, height=200)
+            _show(f3k, use_container_width=True, height=200)
         if cc7 is not None:
             st.markdown("**Códigos de Lançamento (CC7)**")
-            st.dataframe(cc7, use_container_width=True, height=200)
+            _show(cc7, use_container_width=True, height=200)
         if sft is not None:
             st.markdown("**Exceções Fiscais (SFT)**")
-            st.dataframe(sft, use_container_width=True, height=200)
+            _show(sft, use_container_width=True, height=200)
 
 st.subheader("5️⃣ Gerar MIT041")
 if not carregou:
